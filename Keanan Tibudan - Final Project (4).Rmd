@@ -1,0 +1,557 @@
+
+```
+---
+title: "Business Analytics of HMDA data using R"
+author: "Keanan Tibudan"
+date: "Winter, 2025"
+output: html_document
+---
+```{r}
+
+## Final Project Questions
+
+### Data Loading and Create necessary variables (5 points)
+
+# Load required libraries
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(car)
+library(broom)
+library(corrplot)
+library(caret)
+library(lmtest)
+
+# Load the dataset
+file_path <- "C:\\Users\\keana\\Downloads\\HMDA2023_OR.csv" 
+hmda_data <- read.csv(file_path)
+
+# Data transformation and cleaning
+hmda_data_clean <- hmda_data %>%
+  mutate(
+    race = case_when(
+      derived_race == "Asian" ~ "Asian",
+      derived_race == "White" ~ "White",
+      derived_race == "Black or African American" ~ "Black",
+      TRUE ~ "Others"
+    ),
+    sex = as.factor(derived_sex),
+    age = as.factor(applicant_age),
+    denial = ifelse(action_taken == 3, 1, 0),
+    loan_type = as.factor(loan_type),
+    purchaser_type = as.factor(purchaser_type),
+    loan_amount = log(as.numeric(loan_amount)),
+    loan_term = as.numeric(loan_term),
+    property_value = log(as.numeric(property_value)),
+    occupancy_type = as.factor(occupancy_type),
+    area_income = log(ffiec_msa_md_median_family_income),
+    area_minority = tract_minority_population_percent,
+    income = log(income)
+  ) %>%
+  filter(
+    action_taken == 1 | action_taken == 3,
+    loan_type == 1,
+    loan_purpose == 1,
+    property_value > 0,
+    loan_amount > 0,
+    property_value > loan_amount,
+    area_income > 0,
+    total_units == "1",
+    income > 0
+  ) %>%
+  select(
+    denial, race, sex, age, purchaser_type, income, loan_amount,
+    loan_term, property_value, occupancy_type, area_income, area_minority
+  )
+
+# View the first few rows of the cleaned data
+head(hmda_data_clean)
+
+```
+### Descriptive Analytics (10 points)
+1. Most applicants are under 62 years old, with a diverse gender distribution. Community diversity, reflected in the tract_minority_population_percent, can guide targeted marketing efforts toward minority groups. Income data, such as ffiec_msa_md_median_family_income, helps assess financial status, influencing risk evaluations for lenders. Missing values in interest_rate and loan_amount may signal data issues, impacting risk analysis. Common denial reasons, like income and loan-to-value ratios, highlight areas for improving approval processes. Overall, this data can inform decisions on loan products, marketing strategies, risk assessments, and identifying profitable markets
+
+```{r}
+# Summary of the dataset
+summary(hmda_data)
+
+# Check for missing data
+colSums(is.na(hmda_data))
+colnames(hmda_data)
+
+# Identify columns with too many missing values (for example, more than 50% missing values)
+columns_to_remove <- colnames(hmda_data)[colSums(is.na(hmda_data)) > nrow(hmda_data) * 0.5]
+
+# Now, you can remove those columns along with any other irrelevant columns you identify (replace 'irrelevant_column' with actual names if needed)
+hmda_data_clean <- hmda_data %>%
+  select(-c(columns_to_remove))  # This will remove columns with too many missing values
+```
+
+2. **Create graphical representations (using `ggplot2`) to explore relationships between loan denial vs. gender, race, and income area (high, mid, and lower-income areas).**
+   For Male and Female Loan denial rates, it is found that both male and female have similarities in loan originations,(approved and finalized) loan denials, and applications approved within Oregon.
+   Among Loan Denial rates by race, people of caucasian race have the most loan originations, asians have slightly higher originations than black people; in addition, black people have more applications denied than white and asian people and less applications approved compared to white, asianm and other minority races; furthermore, native americans have the highest applicaitons denied.
+   For the visualization of high,mid, and lower-income areas, lower-income areas are more prone to variability for loan denial approval with the lowest amount of loan originations, and for middle to high income loan denial dates, high income has slightly higher loan originations and less applications denied
+   Regarding how financial institutions can leverage this data within Oregon, Financial institutions can use these insights to refine their lending policies and risk assessments. For instance, the similar loan originations and denials for both male and female applicants in Oregon suggest the need for gender-neutral evaluations, focusing on individual financial factors rather than gender. The data also highlights racial disparities, with Caucasians having the highest loan originations, followed by Asians, while Black applicants face higher denial rates and Native Americans experience the most denials. This insight could prompt lenders to review their approval processes for potential biases and create more equitable lending practices. Additionally, the variability in loan denials for lower-income areas, with fewer loan originations, signals that financial institutions might need to offer more flexible lending terms and support for these communities. 
+   
+```{r}
+# Load necessary libraries
+library(ggplot2)
+library(dplyr)
+
+# Convert necessary columns to factors if not already
+hmda_data_clean$derived_sex <- as.factor(hmda_data_clean$derived_sex)
+hmda_data_clean$derived_race <- as.factor(hmda_data_clean$derived_race)
+hmda_data_clean$action_taken <- as.factor(hmda_data_clean$action_taken)
+
+# Filter out 'joint' from gender for denial rates
+hmda_data_clean <- hmda_data_clean %>%
+  filter(derived_sex != "joint")
+
+# Map action_taken to meaningful labels
+hmda_data_clean$action_taken <- factor(hmda_data_clean$action_taken,
+                                       levels = 1:8,
+                                       labels = c("Loan Originated", "Application Approved", 
+                                                  "Application Denied", "Application Withdrawn",
+                                                  "File Closed", "Purchased Loan", 
+                                                  "Preapproval Request Denied", "Preapproval Request Approved"))
+
+# Create a new column for income areas: High, Mid, Low based on tract_to_msa_income_percentage
+hmda_data_clean$income_area <- cut(
+  hmda_data_clean$tract_to_msa_income_percentage,
+  breaks = c(0, 33, 66, 100),
+  labels = c("Low Income", "Mid Income", "High Income"),
+  right = FALSE
+)
+
+# Plot Loan Denial Rates by Income
+ggplot(hmda_data_clean, aes(x = income_area, fill = action_taken)) +
+  geom_bar(position = "fill") +
+  labs(title = "Loan Denial Rates by Income Area", y = "Proportion", x = "Income Area") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) 
+
+# Plot Loan Denial Rates by Race
+ggplot(hmda_data_clean, aes(x = derived_race, fill = action_taken)) +
+  geom_bar(position = "fill") +
+  labs(title = "Loan Denial Rates by Race", y = "Proportion", x = "Race") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) 
+
+# Plot Loan Denial Rates by Sex (Gender)
+ggplot(hmda_data_clean, aes(x = derived_sex, fill = action_taken)) +
+  geom_bar(position = "fill") +
+  labs(title = "Loan Denial Rates by Gender", y = "Proportion", x = "Gender") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) 
+
+# Plot Loan Denial Rates by Race (Alternative Column: 'applicant_race_observed')
+ggplot(hmda_data_clean, aes(x = applicant_race_observed, fill = action_taken)) +
+  geom_bar(position = "fill") +
+  labs(title = "Loan Denial Rates by Observed Race", y = "Proportion", x = "Observed Race") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Plot Loan Denial Rates by Sex (Alternative Column: 'applicant_sex_observed')
+ggplot(hmda_data_clean, aes(x = applicant_sex_observed, fill = action_taken)) +
+  geom_bar(position = "fill") +
+  labs(title = "Loan Denial Rates by Observed Sex", y = "Proportion", x = "Observed Sex") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+3. **Conduct hypothesis tests to analyze differences in loan denial rates across groups in 2
+  In my table, the hypothesis test was conducted to assess whether there is a significant difference in loan denial rates based on race. The null hypothesis (H₀) posits that there is no significant difference in loan denial rates across racial groups, meaning loan denial rates are independent of race. The alternative hypothesis (H₁) suggests that there is a significant difference in loan denial rates across racial groups, indicating that loan denial rates are dependent on race. The Pearson's Chi-squared test was performed on the contingency table for loan denial rates by race, resulting in a chi-squared value of 37,871, with 56 degrees of freedom and a p-value of less than 2.2e-16. Since the p-value is much smaller than the standard significance level of 0.05, we reject the null hypothesis and conclude that loan denial rates are significantly different across racial groups.
+
+The implications of these findings are substantial in the context of mortgage lending fairness, regulatory compliance, and business strategy. From a fairness perspective, these results suggest that racial disparities exist in loan denial rates, raising concerns about discrimination in mortgage lending practices. This highlights the need for financial institutions to carefully review and address any potential biases in their lending practices to ensure fairness. 
+   
+```{r}
+# Create a contingency table for Loan Denial Rates by Race
+contingency_table_race <- table(hmda_data_clean$derived_race, hmda_data_clean$action_taken)
+
+# Perform the chi-square test
+chi_square_test_race <- chisq.test(contingency_table_race)
+
+# Display the results of the chi-square test
+chi_square_test_race
+
+# If the p-value is less than the significance level (usually 0.05), 
+# we reject the null hypothesis and conclude that loan denial rates are 
+# dependent on race.
+
+```
+
+4. **Perform correlation analysis:**
+  In myPearson correlation, the matrix shows that loan amount has a weak positive correlation with property value (0.251), suggesting that higher property values are somewhat associated with higher loan amounts. However, there is no significant correlation between loan amount and interest rate (-0.025) or loan term (-0.009), indicating that changes in these factors do not notably affect the loan amount. Similarly, property value has a weak negative correlation with interest rate (-0.023) and loan term (-0.076), though these correlations are minimal, implying that the interest rate and loan term are only weakly related to property value. Interest rate, in turn, has a moderate negative correlation with loan term (-0.257), suggesting that loans with longer terms tend to have lower interest rates, which could reflect lender strategies or borrower risk profiles.
+```{r}
+# Select relevant continuous variables: loan_amount, property_value, interest_rate, and loan_term
+# Ensure the relevant variables are numeric
+hmda_data_clean$loan_amount <- as.numeric(hmda_data_clean$loan_amount)
+hmda_data_clean$property_value <- as.numeric(hmda_data_clean$property_value)
+hmda_data_clean$interest_rate <- as.numeric(hmda_data_clean$interest_rate)
+hmda_data_clean$loan_term <- as.numeric(hmda_data_clean$loan_term)
+
+# Select relevant continuous variables: loan_amount, property_value, interest_rate, and loan_term
+continuous_vars <- hmda_data_clean %>%
+  select(loan_amount, property_value, interest_rate, loan_term)
+
+# Calculate Pearson correlation matrix
+correlation_matrix <- cor(continuous_vars, use = "complete.obs")
+
+# Print the correlation matrix
+print(correlation_matrix)
+
+# Plot the correlation matrix using a heatmap
+library(ggplot2)
+library(reshape2)
+
+correlation_matrix_melted <- melt(correlation_matrix)
+
+ggplot(correlation_matrix_melted, aes(Var1, Var2, fill = value)) +
+  geom_tile() +
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", midpoint = 0) +
+  theme_minimal() +
+  labs(title = "Correlation Heatmap of Continuous Variables", x = "Variables", y = "Variables")
+
+```
+
+### Regression Analysis on the Log of Loan Amount (15 points)
+
+1. **Develop and analyze three different regression models using the log of loan amount as the dependent variable.**
+  The approach to developing and analyzing three different regression models using the log of loan amount as the dependent variable is well-structured. The first model includes property value, interest rate, and loan term as independent variables. These factors are crucial in mortgage decision-making: property value directly influences the loan amount a borrower can receive, interest rates affect the affordability and total repayment amounts, and loan term impacts monthly payments and overall loan size. The second model adds income area as an independent variable. This represents the borrower’s geographic location, and varying income levels in different regions help lenders assess the financial capability of borrowers based on their location, which can influence the loan amounts they qualify for. The third model further includes income and debt-to-income ratio (DTI). Income indicates a borrower’s ability to repay the loan, while DTI provides insight into their financial health, signaling potential risks of default. These models, through the combination of property value, interest rate, loan term, income, and DTI, offer a comprehensive analysis of factors influencing loan approval and repayment ability, helping lenders make more informed decisions based on borrower profiles and regional economic conditions.
+   
+```{r}
+# Create a new column 'log_loan_amount' by applying log transformation to the loan_amount
+hmda_data_clean$log_loan_amount <- log(hmda_data_clean$loan_amount)
+
+# Fit regression model with log_loan_amount as the dependent variable
+model1 <- lm(log_loan_amount ~ property_value + interest_rate + loan_term, data = hmda_data_clean)
+summary(model1)
+
+# Fit regression model including income_area as an independent variable
+model2 <- lm(log_loan_amount ~ property_value + interest_rate + loan_term + income_area, data = hmda_data_clean)
+summary(model2)
+
+# Fit regression model including income and debt-to-income ratio
+model3 <- lm(log_loan_amount ~ property_value + interest_rate + loan_term + income + debt_to_income_ratio, data = hmda_data_clean)
+summary(model3)
+
+```
+
+2. **Identify significant variables in each model by evaluating:**
+The data provides valuable insights for pricing strategies and capital allocation in mortgage lending. Key factors like property value, interest rate, loan term, and income area help shape loan amounts, allowing lenders to adjust terms based on these variables to remain competitive. The strong influence of debt-to-income ratios and income on loan size informs capital allocation, enabling lenders to manage risk more effectively by adjusting capital reserves for higher-risk loans. By understanding these relationships, lenders can tailor their offerings to specific borrower segments, optimize their pricing, and ensure regulatory compliance.
+The regression models provide several important insights regarding the factors influencing loan amounts. In the first model, property value has a significant positive relationship with loan amounts, with an estimate of 7.693e-08, and interest rate has a negative relationship with an estimate of -0.2077. Loan term is also positively related with an estimate of 0.003897. All of these variables have p-values less than 2e-16, indicating their statistical significance. In the second model, when adding income area, property value remains significant with an estimate of 1.105e-07, interest rate continues to show a negative relationship with an estimate of -0.1773, and loan term remains positively related with an estimate of 0.003762. The income area variable also shows significance with Mid Income having an estimate of -0.4343 and High Income showing -0.3539, indicating that borrowers from higher income areas tend to have smaller loan amounts. Finally, the third model includes income and debt-to-income ratio as factors. Here, property value continues to be positively associated with loan amount, with an estimate of 8.413e-07, interest rate remains negatively related with an estimate of -0.2621, and loan term stays positively related with an estimate of 0.004463. Income is positively correlated with loan amount, with an estimate of 9.549e-06, and debt-to-income ratio shows a positive relationship for various ranges of ratios, such as >60% with an estimate of 0.2503 and 50%-60% with an estimate of 0.3481, indicating that borrowers with higher debt-to-income ratios tend to receive larger loans. All variables in this model have p-values less than 2e-16, signaling strong statistical significance. These results provide valuable insights for mortgage lenders, highlighting key factors such as property value, income, and debt-to-income ratio that should be considered when making lending decisions and formulating pricing strategies.
+```{r}
+summary(model1)
+summary(model2)
+summary(model3)
+```
+
+
+3. **Check for multicollinearity among independent variables using the Variance Inflation Factor (VIF).**
+   The regression models reveal key factors influencing loan amounts. Variables like property value (coefficient = 7.693e-08) and interest rate (coefficient = -2.077e-01) show strong significance with P-values less than 0.05, indicating they are vital in determining loan amounts. For instance, a 1% increase in property value could significantly increase the loan amount. The debt-to-income ratio (coefficient = 0.2503 for >60%) and income (coefficient = 9.549e-06) also strongly influence loan decisions, with P-values near 0, confirming their importance. The GVIF values, such as 1.006923 for property value, suggest no significant multicollinearity, ensuring reliable results. These insights help shape pricing strategies by adjusting rates based on interest rates and property value, while informing capital allocation to manage risk based on income and debt levels.
+```{r}
+# Load the necessary package
+library(car)
+
+# Fit the regression model
+model1 <- lm(log_loan_amount ~ property_value + interest_rate + loan_term + income_area, data = hmda_data_clean)
+
+# Calculate the VIF for model1
+vif(model1)
+
+# Calculate the VIF for model2
+vif(model2)
+
+# Calculate the VIF for model3
+vif(model3)
+
+```
+
+4. **Perform F-tests and restricted F-tests to compare model performance.**
+   
+```{r}
+f_test_result_1_vs_2 <- anova(model1, model2)
+print(f_test_result_1_vs_2)
+summary(model.frame(model2))
+summary(model.frame(model3))
+nrow(model.frame(model2))
+nrow(model.frame(model3))
+```
+
+5. **Identify the best-performing model based on adjusted R-squared values.**
+As Model 2 and 3 Have a high R-squared than 1, these are the best performing models.
+```{r}
+# Model 1: log_loan_amount ~ property_value + interest_rate + loan_term + income_area
+model1 <- lm(log_loan_amount ~ property_value + interest_rate + loan_term + income_area, data = hmda_data_clean)
+summary(model1)
+# Model 2: log_loan_amount ~ property_value + interest_rate + loan_term + income + debt_to_income_ratio
+model2 <- lm(log_loan_amount ~ property_value + interest_rate + loan_term + income + debt_to_income_ratio, data = hmda_data_clean)
+summary(model2)
+model3 <- lm(log_loan_amount ~ property_value + interest_rate + loan_term + income + debt_to_income_ratio, data = hmda_data_clean)
+summary(model3)
+# Extract Adjusted R-squared values
+adjusted_r_squared_model1 <- summary(model1)$adj.r.squared
+adjusted_r_squared_model2 <- summary(model2)$adj.r.squared
+adjusted_r_squared_model3 <- summary(model2)$adj.r.squared
+
+# Print the adjusted R-squared values
+cat("Adjusted R-squared for Model 1: ", adjusted_r_squared_model1, "\n")
+cat("Adjusted R-squared for Model 2: ", adjusted_r_squared_model2, "\n")
+cat("Adjusted R-squared for Model 3: ", adjusted_r_squared_model3, "\n")
+# Fit regression model including income and debt-to-income ratio
+model3 <- lm(log_loan_amount ~ property_value + interest_rate + loan_term + income + debt_to_income_ratio, data = hmda_data_clean)
+summary(model3)
+```
+
+
+6. **Conduct cross-validation by splitting the dataset into 60% training and 40% testing subsets.**
+```{r}
+set.seed(233)
+trainIndex <- createDataPartition(hmda_data_clean$loan_amount, p = 0.6, list = FALSE)
+train_data <- hmda_data_clean[trainIndex, ]
+test_data <- hmda_data_clean[-trainIndex, ]
+
+
+# Fit model on training data
+# Run the regression model
+train_model <- lm(loan_amount ~ income + loan_term + property_value + income_area + derived_race + derived_sex, data = train_data)
+
+# Summary of the model
+summary(train_model)
+```
+7. **Evaluate model performance using Root Mean Squared Error (RMSE), Mean Squared Error (MSE), and Mean Percentage Error (MPE) .**
+The regression and classification models were evaluated using various variables, including income, loan term, property value, and demographic factors such as race and sex. The linear regression model showed significant predictors, with loan term and property value being highly impactful, while income had a marginal effect. The logistic regression models, which were fitted for loan denial prediction, confirmed the significant roles of income, loan term, and property value, with income and loan term showing strong negative effects on loan denial probability. The coefficients for some demographic variables, including race and sex, had varied significance across models. The AUC values indicated that while all models had moderate predictive power, the logistic regression models slightly outperformed the Linear Probability Model (LPM) in terms of accuracy, with AUCs of 0.665 and 0.661 compared to 0.610 for the LPM. The confusion matrices for different threshold levels revealed varied levels of prediction performance, with thresholds of 50%, 30%, and 10% showing different trade-offs between false positives and false negatives. The AUC results further supported that while the models were not perfect, they provided useful insights into the factors influencing mortgage loan denial
+
+
+### Binary Dependent Regression Analysis on Denial (10 points)
+
+1. **Develop three models to predict loan denial:**
+   - One Linear Probability Model (LPM).
+   - Two best Logistic Regression Models with different sets of independent variables.
+   
+```{r}
+
+# LPM model
+# Check the unique values in the action_taken column
+# Create binary loan denial variable (1 for denial, 0 for others)
+hmda_data_clean$loan_denial <- ifelse(hmda_data_clean$action_taken == "Application Denied", 1, 0)
+
+# Fit the LPM (Linear Probability Model) using lm()
+lpm_model <- lm(loan_denial ~ income + loan_term + property_value + income_area + derived_race + derived_sex, data = hmda_data_clean)
+
+# Summarize the model
+summary(lpm_model)
+
+# Model 1: Logistic Regression with a basic set of independent variables
+logit_model_1 <- glm(loan_denial ~ income + loan_term + property_value, data = hmda_data_clean, family = binomial)
+
+# Summary of Model 1
+summary(logit_model_1)
+
+# Model 2: Logistic Regression with additional independent variables
+logit_model_2 <- glm(loan_denial ~ income + loan_term + property_value + income_area + derived_race + derived_sex, 
+                     data = hmda_data_clean, family = binomial)
+colnames(hmda_data_clean)
+
+# Summary of Model 2
+summary(logit_model_2)
+
+```
+
+2. **Identify significant variables in each model by analyzing p-values, odds ratios (for logistic regression), and their economic and statistical implications. Discuss how lenders could use these variables to refine credit risk models, regulatory compliance, and decision-making processes.**
+  In analyzing the results of the models, significant variables include income, loan term, property value, and income area. In the linear regression model, loan term, property value, and income area (Mid and High Income) are significant predictors of loan denial. The logistic regression models show that income, loan term, and property value significantly impact loan denial, with higher income and shorter loan terms reducing the likelihood of denial, while higher property values increase the likelihood. Demographic factors like race and sex were not consistently significant in the models, except for income area and certain sex categories. These findings suggest that lenders should prioritize factors like income, loan term, and property value in their credit risk models while being mindful of the impact of income area. In terms of regulatory compliance, the lack of significant race and sex factors aligns with fair lending practices, but demographic variables like sex and income area still hold some relevance. Lenders can refine their decision-making processes by focusing on these quantifiable variables to improve approval rates for lower-risk applicants and avoid unnecessary denials, making their models more equitable and effective.
+```{r}
+summary(lpm_model)
+summary(logit_model_1)
+summary(logit_model_2)
+
+```
+ 
+3. **Generate confusion matrices using different probability thresholds (50%, 30%, and 10%).**
+   
+```{r}
+# Generate predicted probabilities for the Linear Probability Model (LPM)
+predicted_probabilities_lpm <- predict(lpm_model, newdata = hmda_data_clean)
+
+# Ensure 'action_taken' is properly mapped to 1 (denied) and 0 (approved)
+hmda_data_clean$actual_denial <- ifelse(hmda_data_clean$action_taken == "Application Denied", 1, 0)
+
+# Classify based on different thresholds
+threshold_50 <- ifelse(predicted_probabilities_lpm > 0.50, 1, 0)
+threshold_30 <- ifelse(predicted_probabilities_lpm > 0.30, 1, 0)
+threshold_10 <- ifelse(predicted_probabilities_lpm > 0.10, 1, 0)
+
+# Confusion matrices for LPM Model
+cm_50 <- table(Predicted = threshold_50, Actual = hmda_data_clean$actual_denial)
+cm_30 <- table(Predicted = threshold_30, Actual = hmda_data_clean$actual_denial)
+cm_10 <- table(Predicted = threshold_10, Actual = hmda_data_clean$actual_denial)
+
+# Function to calculate performance metrics
+calculate_metrics <- function(cm) {
+  TP <- cm[2, 2]
+  TN <- cm[1, 1]
+  FP <- cm[1, 2]
+  FN <- cm[2, 1]
+  
+  accuracy <- (TP + TN) / sum(cm)
+  precision <- TP / (TP + FP)
+  recall <- TP / (TP + FN)
+  f1_score <- 2 * (precision * recall) / (precision + recall)
+  
+  metrics <- c(Accuracy = accuracy, Precision = precision, Recall = recall, F1_Score = f1_score)
+  return(metrics)
+}
+
+# Calculate and print metrics for each threshold
+cat("Metrics for 50% Threshold:\n")
+print(calculate_metrics(cm_50))
+
+cat("\nMetrics for 30% Threshold:\n")
+print(calculate_metrics(cm_30))
+
+cat("\nMetrics for 10% Threshold:\n")
+print(calculate_metrics(cm_10))
+
+```
+4. **Compare model performance and justify the most effective model. Explain how these results could inform credit approval policies and financial service strategies.*
+  Through my model comparison, Logistic Regression Model 2 at 30% as the optimal credit approval prediction model. While the Linear Probability Model (LPM) is subject to extremely low precision and an imbalance between false negatives and false positives, Logistic Regression Model 1 is a little better but not optimal. On the contrary, Model 2 Logistic Regression at 30% has the highest F1-score (0.3091), good precision (0.2465), and high recall (0.4143) and is thus best suited to identify risky candidates while maintaining low false approvals. The model has an adequate calibration approach to ensure financial inclusion versus risk management. If the cutoff is set too high (50%), good applicants will be rejected in huge numbers, while setting the cutoff too low (10%) would mean too many approvals and heightened default risks, and these findings can guide lenders to implement data-driven lending policies maximizing credit decision approvals for profitability at lower risk. 
+```{r}
+evaluate_model <- function(model, model_name, data) {
+  if ("glm" %in% class(model)) {
+    # Logistic Regression Model
+    predicted_probabilities <- predict(model, type = "response", newdata = data)
+  } else if ("lm" %in% class(model)) {
+    # Linear Probability Model (LPM)
+    predicted_probabilities <- predict(model, newdata = data)
+  } else {
+    stop("Unsupported model type")
+  }
+
+  # Ensure 'action_taken' is mapped to 1 (denied) and 0 (approved)
+  data$actual_denial <- ifelse(data$action_taken == "Application Denied", 1, 0)
+
+  # Classification at different thresholds
+  threshold_50 <- ifelse(predicted_probabilities > 0.50, 1, 0)
+  threshold_30 <- ifelse(predicted_probabilities > 0.30, 1, 0)
+  threshold_10 <- ifelse(predicted_probabilities > 0.10, 1, 0)
+
+  # Confusion matrices
+  cm_50 <- table(Predicted = threshold_50, Actual = data$actual_denial)
+  cm_30 <- table(Predicted = threshold_30, Actual = data$actual_denial)
+  cm_10 <- table(Predicted = threshold_10, Actual = data$actual_denial)
+
+  # Function to calculate performance metrics
+  calculate_metrics <- function(cm) {
+    TP <- cm[2, 2]
+    TN <- cm[1, 1]
+    FP <- cm[1, 2]
+    FN <- cm[2, 1]
+
+    accuracy <- (TP + TN) / sum(cm)
+    precision <- TP / (TP + FP)
+    recall <- TP / (TP + FN)
+    f1_score <- 2 * (precision * recall) / (precision + recall)
+
+    metrics <- c(Accuracy = accuracy, Precision = precision, Recall = recall, F1_Score = f1_score)
+    return(metrics)
+  }
+
+  # Calculate metrics for each threshold
+  metrics_50 <- calculate_metrics(cm_50)
+  metrics_30 <- calculate_metrics(cm_30)
+  metrics_10 <- calculate_metrics(cm_10)
+
+  # Print results
+  cat("\nModel:", model_name)
+  cat("\nMetrics for 50% Threshold:\n")
+  print(metrics_50)
+  cat("\nMetrics for 30% Threshold:\n")
+  print(metrics_30)
+  cat("\nMetrics for 10% Threshold:\n")
+  print(metrics_10)
+}
+
+# Run model evaluation
+evaluate_model(lpm_model, "Linear Probability Model (LPM)", hmda_data_clean)
+evaluate_model(logit_model_1, "Logistic Regression Model 1", hmda_data_clean)
+evaluate_model(logit_model_2, "Logistic Regression Model 2", hmda_data_clean)
+
+```
+
+
+5. **Perform cross-validation using the Area Under the Curve (AUC) metric.**
+   
+```{r}
+
+# ROC and AUC for Logistic regression model 1
+# Load necessary libraries
+library(caret)   # For cross-validation
+library(pROC)    # For AUC calculation
+library(boot)    # For cross-validation
+
+# Set up the training control for cross-validation
+set.seed(123)  # Set seed for reproducibility
+
+# Number of folds for cross-validation
+k_folds <- 10  
+
+# Set up the training control for cross-validation
+train_control <- trainControl(method = "cv", number = k_folds, 
+                               summaryFunction = twoClassSummary, 
+                               classProbs = TRUE, 
+                               verboseIter = TRUE)
+
+# Define a function to calculate AUC for the logistic models
+calculate_auc <- function(model, data, response_var) {
+  predicted_probabilities <- predict(model, newdata = data, type = "response")
+  
+  # Calculate the ROC curve and AUC
+  roc_curve <- roc(data[[response_var]], predicted_probabilities)
+  
+  # Return the AUC
+  auc_value <- auc(roc_curve)
+  return(auc_value)
+}
+
+# Cross-validation loop for each model
+auc_lpm <- numeric(k_folds)
+auc_logit_1 <- numeric(k_folds)
+auc_logit_2 <- numeric(k_folds)
+
+# Perform cross-validation for each model
+for (i in 1:k_folds) {
+  # Split the data into training and testing sets for each fold
+  train_index <- createDataPartition(hmda_data_clean$actual_denial, p = 0.8, list = FALSE)
+  train_data <- hmda_data_clean[train_index, ]
+  test_data <- hmda_data_clean[-train_index, ]
+  
+  # Calculate AUC for LPM model (if LPM is logistic model)
+  auc_lpm[i] <- calculate_auc(lpm_model, test_data, "actual_denial")
+  
+  # Calculate AUC for logit_model_1
+  auc_logit_1[i] <- calculate_auc(logit_model_1, test_data, "actual_denial")
+  
+  # Calculate AUC for logit_model_2
+  auc_logit_2[i] <- calculate_auc(logit_model_2, test_data, "actual_denial")
+}
+
+# Calculate average AUC for each model
+mean_auc_lpm <- mean(auc_lpm)
+mean_auc_logit_1 <- mean(auc_logit_1)
+mean_auc_logit_2 <- mean(auc_logit_2)
+
+# Print the AUC results for each model
+cat("Average AUC for LPM Model:", mean_auc_lpm, "\n")
+cat("Average AUC for Logit Model 1:", mean_auc_logit_1, "\n")
+cat("Average AUC for Logit Model 2:", mean_auc_logit_2, "\n")
+
+
+```
+
+### Summary and Findings (5 points)
+Summarize the findings from each section of the project:
+
+1. **Key insights from the descriptive analysis.**
+  For the descriptive analysis, the data provides valuable insights that can shape strategies in the mortgage industry. Most applicants are under 62 years old, with a diverse gender distribution. Community diversity, reflected in the tract_minority_population_percent, can guide targeted marketing efforts toward minority groups. Income data, such as ffiec_msa_md_median_family_income, helps assess financial status, influencing risk evaluations for lenders. Missing values in interest_rate and loan_amount may signal data issues, impacting risk analysis. Common denial reasons, like income and loan-to-value ratios, highlight areas for improving approval processes. Overall, this data can inform decisions on loan products, marketing strategies, risk assessments, and identifying profitable markets.
+2. **Findings from the regression analysis on loan amounts.**
+The regression analysis on loan amounts revealed predictors, including income, loan term, and property value, with the linear regression model showing that loan term and property value had a strong impact, while income played a more marginal role. The logistic regression models, focused on predicting loan denial, confirmed the importance of income, loan term, and property value, with both income and loan term negatively affecting the probability of loan denial. The regression analysis also found that demographic factors like race and sex had varied significance across models. The AUC values indicated moderate predictive power across all models, with logistic regression models slightly outperforming the Linear Probability Model (LPM), achieving AUCs of 0.665 and 0.661 compared to 0.610 for the LPM. Confusion matrices for different threshold levels (50%, 30%, and 10%) highlighted trade-offs between false positives and false negatives. 
+3. **Findings from the binary dependent variable analysis.**
+ The linear regression model identified income, loan term, and property value as significant predictors, with loan term and property value showing a strong influence on loan denial. Income had a marginal impact. The logistic regression models reinforced these findings, with income and loan term being strongly negatively correlated with loan denial probability. Demographic variables such as race and sex had mixed significance, with some categories showing no significant effect on loan denial. The logistic regression models also highlighted that income and property value were significant predictors, with high-income areas showing a positive association with loan approval. 
+4. **Provide an overall assessment of the results, discussing limitations and real-world business applications.**
+  In the regression analysis of loan amounts and loan denial rates revealed several key insights that can help inform business strategies. The linear regression model showed that loan term and property value were strong predictors of loan amounts, with income playing a more marginal role. The logistic regression models, which focused on predicting loan denial, confirmed that income and loan term were strongly negatively correlated with the probability of loan denial, with higher income and longer loan terms associated with lower chances of denial. Property value also played a significant role, further supporting its importance in determining loan outcomes. Demographic factors such as race and sex showed varied significance, with some categories not exhibiting a notable impact on loan approval or denial. For example, the analysis found that race and sex had a mixed effect, with certain races and sexes showing no significant correlation with loan denial. When comparing model performance, the logistic regression models slightly outperformed the Linear Probability Model (LPM), with AUC values of 0.665 and 0.661, respectively, compared to 0.610 for the LPM, indicating a moderate predictive power across all models. Confusion matrices for different threshold levels (50%, 30%, and 10%) revealed the trade-offs between false positives and false negatives, showing that a lower threshold reduced false negatives but increased false positives. In terms of business applications, financial institutions can leverage these findings to refine lending strategies by focusing on the most significant predictors of loan denial, such as income, loan term, and property value, while also being mindful of potential biases related to demographic factors. Moreover, the analysis of high, mid, and low-income areas suggests that institutions could offer more flexible lending terms in lower-income regions to better serve these communities.
+
